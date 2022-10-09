@@ -1,5 +1,12 @@
 # SAC-Discrete-Pytorch
-This is a **clean and robust Pytorch implementation of Soft-Actor-Critic** on **discrete** action space. 
+This is a **clean and robust Pytorch implementation of Soft-Actor-Critic** on **discrete** action space. Here is the training curve:  
+
+<img src="https://github.com/XinJingHao/DQN-DDQN-Pytorch/blob/main/IMGs/DQN_DDQN_result.png"/>
+All the experiments are trained with same hyperparameters. **Other RL algorithms by Pytorch can be found [here](https://github.com/XinJingHao/RL-Algorithms-by-Pytorch).**
+
+A quick render here:
+
+![avatar](https://github.com/XinJingHao/DQN-DDQN-Pytorch/blob/main/IMGs/Render%20of%20DDQN.gif)
 
 
 ## Dependencies
