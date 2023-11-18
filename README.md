@@ -7,6 +7,15 @@ This is a **clean and robust Pytorch implementation of Soft-Actor-Critic** on **
 
 All the experiments are trained with same hyperparameters. Other RL algorithms by Pytorch can be found [here](https://github.com/XinJingHao/RL-Algorithms-by-Pytorch).
 
+## Dependencies
+```python
+gymnasium==0.29.1
+numpy==1.26.1
+pytorch==2.1.0
+
+python==3.11.5
+```
+
 ## How to use my code
 ### Train from scratch
 ```bash
