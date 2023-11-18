@@ -1,75 +1,36 @@
 import copy
 import torch
 import numpy as np
-import torch.nn as nn
-from utils import device
 import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
-
-def build_net(layer_shape, hid_activation, output_activation):
-	'''build net with for loop'''
-	layers = []
-	for j in range(len(layer_shape)-1):
-		act = hid_activation if j < len(layer_shape)-2 else output_activation
-		layers += [nn.Linear(layer_shape[j], layer_shape[j+1]), act()]
-	return nn.Sequential(*layers)
+from utils import Double_Q_Net, Policy_Net, ReplayBuffer
 
 
-class Q_Net(nn.Module):
-	def __init__(self, state_dim, action_dim, hid_shape):
-		super(Q_Net, self).__init__()
-		layers = [state_dim] + list(hid_shape) + [action_dim]
-
-		self.Q1 = build_net(layers, nn.ReLU, nn.Identity)
-		self.Q2 = build_net(layers, nn.ReLU, nn.Identity)
-
-	def forward(self, s):
-		q1 = self.Q1(s)
-		q2 = self.Q2(s)
-		return q1,q2
-
-
-class Policy_Net(nn.Module):
-	def __init__(self, state_dim, action_dim, hid_shape):
-		super(Policy_Net, self).__init__()
-		layers = [state_dim] + list(hid_shape) + [action_dim]
-		self.P = build_net(layers, nn.ReLU, nn.Identity)
-
-	def forward(self, s):
-		logits = self.P(s)
-		probs = F.softmax(logits, dim=1)
-		return probs
-
-
-class SACD_Agent(object):
-	def __init__(self, opt):
-		self.action_dim = opt.action_dim
-		self.batch_size = opt.batch_size
-		self.gamma = opt.gamma
+class SACD_agent():
+	def __init__(self, **kwargs):
+		# Init hyperparameters for agent, just like "self.gamma = opt.gamma, self.lambd = opt.lambd, ..."
+		self.__dict__.update(kwargs)
 		self.tau = 0.005
+		self.H_mean = 0
+		self.replay_buffer = ReplayBuffer(self.state_dim, self.dvc, max_size=int(1e6))
 
-		self.actor = Policy_Net(opt.state_dim, opt.action_dim, opt.hid_shape).to(device)
-		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=opt.lr)
+		self.actor = Policy_Net(self.state_dim, self.action_dim, self.hid_shape).to(self.dvc)
+		self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.lr)
 
-		self.q_critic = Q_Net(opt.state_dim, opt.action_dim, opt.hid_shape).to(device)
-		self.q_critic_optimizer = torch.optim.Adam(self.q_critic.parameters(), lr=opt.lr)
-
+		self.q_critic = Double_Q_Net(self.state_dim, self.action_dim, self.hid_shape).to(self.dvc)
+		self.q_critic_optimizer = torch.optim.Adam(self.q_critic.parameters(), lr=self.lr)
 		self.q_critic_target = copy.deepcopy(self.q_critic)
 		for p in self.q_critic_target.parameters(): p.requires_grad = False
 
-		self.alpha = opt.alpha
-		self.adaptive_alpha = opt.adaptive_alpha
-		if opt.adaptive_alpha:
+		if self.adaptive_alpha:
 			# We use 0.6 because the recommended 0.98 will cause alpha explosion.
-			self.target_entropy = 0.6 * (-np.log(1 / opt.action_dim))  # H(discrete)>0
-			self.log_alpha = torch.tensor(np.log(opt.alpha), dtype=float, requires_grad=True, device=device)
-			self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=opt.lr)
-
-		self.H_mean = 0
+			self.target_entropy = 0.6 * (-np.log(1 / self.action_dim))  # H(discrete)>0
+			self.log_alpha = torch.tensor(np.log(self.alpha), dtype=float, requires_grad=True, device=self.dvc)
+			self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=self.lr)
 
 	def select_action(self, state, deterministic):
 		with torch.no_grad():
-			state = torch.FloatTensor([state]).to(device) #from (s_dim,) to (1, s_dim)
+			state = torch.FloatTensor(state[np.newaxis,:]).to(self.dvc) #from (s_dim,) to (1, s_dim)
 			probs = self.actor(state)
 			if deterministic:
 				a = probs.argmax(-1).item()
@@ -77,8 +38,8 @@ class SACD_Agent(object):
 				a = Categorical(probs).sample().item()
 			return a
 
-	def train(self,replay_buffer):
-		s, a, r, s_next, dw = replay_buffer.sample(self.batch_size)
+	def train(self):
+		s, a, r, s_next, dw = self.replay_buffer.sample(self.batch_size)
 
 		#------------------------------------------ Train Critic ----------------------------------------#
 		'''Compute the target soft Q value'''
@@ -88,7 +49,7 @@ class SACD_Agent(object):
 			next_q1_all, next_q2_all = self.q_critic_target(s_next)  # [b,a_dim]
 			min_next_q_all = torch.min(next_q1_all, next_q2_all)
 			v_next = torch.sum(next_probs * (min_next_q_all - self.alpha * next_log_probs), dim=1, keepdim=True) # [b,1]
-			target_Q = r + (1 - dw) * self.gamma * v_next
+			target_Q = r + (~dw) * self.gamma * v_next
 
 		'''Update soft Q net'''
 		q1_all, q2_all = self.q_critic(s) #[b,a_dim]
@@ -134,11 +95,11 @@ class SACD_Agent(object):
 		for param, target_param in zip(self.q_critic.parameters(), self.q_critic_target.parameters()):
 			target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
 
-	def save(self, index, b_envname):
-		torch.save(self.actor.state_dict(), "./model/sacd_actor_{}_{}.pth".format(index, b_envname))
-		torch.save(self.q_critic.state_dict(), "./model/sacd_critic_{}_{}.pth".format(index, b_envname))
+	def save(self, timestep, EnvName):
+		torch.save(self.actor.state_dict(), f"./model/sacd_actor_{timestep}_{EnvName}.pth")
+		torch.save(self.q_critic.state_dict(), f"./model/sacd_critic_{timestep}_{EnvName}.pth")
 
 
-	def load(self, index, b_envname):
-		self.actor.load_state_dict(torch.load("./model/sacd_actor_{}_{}.pth".format(index, b_envname)))
-		self.q_critic.load_state_dict(torch.load("./model/sacd_critic_{}_{}.pth".format(index, b_envname)))
+	def load(self, timestep, EnvName):
+		self.actor.load_state_dict(torch.load(f"./model/sacd_actor_{timestep}_{EnvName}.pth"))
+		self.q_critic.load_state_dict(torch.load(f"./model/sacd_critic_{timestep}_{EnvName}.pth"))
